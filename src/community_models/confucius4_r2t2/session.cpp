@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -310,13 +311,21 @@ std::string R2T2ASRSession::generate_text(
     R2T2ASRGenerationOptions options;
     options.max_new_tokens = stream_config_.max_new_tokens;
     options.reuse_graphs = true;
-    options.incremental_prefill = true;
+    options.incremental_prefill = std::getenv("RTTA_EVAL_DISABLE_CACHE") == nullptr;
     options.cached_prefix_steps = cached_prefix_steps;
     const auto tokens = thinker_.generate(prompt, embeddings, options);
     return tokenizer_.decode(tokens.token_ids);
 }
 
 R2T2ASRAudioEmbeddings R2T2ASRSession::encode_stream_audio(const R2T2ASRAudioFeatures & features) {
+    // Evaluation-only ablation: leave default upstream behavior unchanged.
+    if (std::getenv("RTTA_EVAL_DISABLE_CACHE") != nullptr) {
+        cached_audio_embeddings_ = {};
+        cached_audio_features_.clear();
+        cached_audio_frames_ = 0;
+        prev_cached_audio_tokens_ = 0;
+        return audio_encoder_.encode(features, /*reuse_graph=*/true);
+    }
     const auto & config = assets_->config.audio_encoder;
     const int64_t chunk_frames = config.n_window * 2;
     const int64_t window_frames = config.n_window_infer;
