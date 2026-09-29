@@ -2,6 +2,22 @@
 #include "dequantize.cuh"
 #include "convert.cuh"
 
+// Evaluation compatibility patch: Q2_K token embedding row lookup.
+// Same block layout and arithmetic as convert.cu dequantize_block_q2_K.
+static __device__ __forceinline__ void rtta_dequantize_q2_k(
+        const void * vx, const int64_t ib, const int iqs, float2 & v) {
+    const block_q2_K & x = ((const block_q2_K *) vx)[ib];
+    const float d = __low2half(x.dm);
+    const float m = __high2half(x.dm);
+    const int l = iqs % 32;
+    const int shift = 2 * (iqs / 32);
+    const int scale = iqs / 16;
+    v.x = d * (x.scales[scale] & 15) * ((x.qs[l] >> shift) & 3)
+          - m * (x.scales[scale] >> 4);
+    v.y = d * (x.scales[scale + 8] & 15) * ((x.qs[l + 32] >> shift) & 3)
+          - m * (x.scales[scale + 8] >> 4);
+}
+
 template<int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
 static __global__ void k_get_rows(
         const void * __restrict__ src0, const int32_t * __restrict__ src1, dst_t * __restrict__ dst,
@@ -207,6 +223,10 @@ static void ggml_cuda_get_rows_switch_src0_type(
             break;
         case GGML_TYPE_Q5_1:
             get_rows_cuda_q<QK5_1, QR5_1, dequantize_q5_1>(src0_d, src1_d, dst_d,
+                ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
+            break;
+        case GGML_TYPE_Q2_K:
+            get_rows_cuda_q<QK_K, 2, rtta_dequantize_q2_k>(src0_d, src1_d, dst_d,
                 ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_Q8_0:
